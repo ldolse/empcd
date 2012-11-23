@@ -368,10 +368,10 @@ static const struct empcd_funcs
 	{"MPD_SEEK",	f_seek,		"mpd_seek",		"[+|-]<val>[%]",	"MPD Seek direct or relative (+|-) percentage when ends in %"},
 	{"MPD_VOLUME",	f_volume,	"mpd_volume",		"[+|-]<val>[%]",	"MPD Volume direct or relative (+|-) percentage when ends in %"},
 	{"MPD_RANDOM",	f_random,	"mpd_random",		"[toggle|on|off]",	"MPD Random Toggle or Set"},
-	{"MPD_LOAD",	f_load,		"mpd_plst_load",	"<playlist>",		"MPD Load Playlist"},
-	{"MPD_SAVE",	f_save,		"mpd_plst_save",	"<playlist>",		"MPD Save Playlist"},
-	{"MPD_CLEAR",	f_clear,	"mpd_plst_clear",	NULL,			"MPD Clear Playlist"},
-	{"MPD_REMOVE",	f_remove,	"mpd_plst_remove",	"<playlist>",		"MPD Remove Playlist"},
+	{"MPD_LOAD",	f_load,		"mpd_load",	"<playlist>",		"MPD Append Playlist"},
+	{"MPD_SAVE",	f_save,		"mpd_save",	"<playlist>",		"MPD Save Playlist"},
+	{"MPD_CLEAR",	f_clear,	"mpd_clear",	NULL,			"MPD Clear Playlist"},
+	{"MPD_REMOVE",	f_remove,	"mpd_remove",	"<playlist>",		"MPD Remove Playlist"},
 	{NULL,		NULL,		NULL,			NULL,			"undefined"}
 };
 
