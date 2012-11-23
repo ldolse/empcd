@@ -1,3 +1,17 @@
+empcd (2012.11.22) stable; urgency=low
+
+  * Move code repo to Github: https://github.com/massar/empcd/
+  * Allow entering of numeric events, eg with: key 165 UP mpd_next
+  * Minor formatting fixups
+  * Add 'giveup' and 'dontgiveup' option for retry on device open
+  * Fixup options ordering (hinted by following github commit:
+    https://github.com/Jille/empcd/commit/84a5b76f3fdeda5169d3654c6d9c35978124cada)
+
+  Lee Dolsen (https://github.com/ldolse/empcd/)
+  * Updated keytable to reflect IR & Multimedia additions to the kernel
+
+ -- Jeroen Massar <jeroen@massar.ch>  Thu, 22 Nov 2012 15:07:42 +0100
+
 empcd (2008.02.16) stable; urgency=low
 
   * Code cleanup, removal of compiler warnings.

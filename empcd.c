@@ -24,6 +24,7 @@ unsigned int		verbosity = 0, drop_uid = 0, drop_gid = 0;
 bool			daemonize = true;
 bool			running = true;
 bool			exclusive = true;
+bool			giveup = true;
 char			*mpd_host = NULL, *mpd_port = NULL;
 
 /* When we receive a signal, we abort */
@@ -82,13 +83,13 @@ mpd_Connection *empcd_setup()
 
 	/* parse password and host */
 	test = strstr(mpd_host,"@");
-        password_len = test-mpd_host;
+	password_len = test - mpd_host;
 	if (test) parsed_len++;
 
 	if (!test) password_len = 0;
-        if (test && password_len != 0) parsed_len += password_len;
+	if (test && password_len != 0) parsed_len += password_len;
 
-	mpd = mpd_newConnection(mpd_host+parsed_len, iport, 10);
+	mpd = mpd_newConnection(mpd_host + parsed_len, iport, 10);
 	if (!mpd) return NULL;
 
 	if (mpd->error)
@@ -176,12 +177,17 @@ void f_exec(const char *arg, const char *args)
 	system(arg);
 }
 
+void f_quit(const char *arg, const char *args)
+{
+	running = false;
+}
+
 #define F_CMDG(fn, f)											\
 void fn(const char *arg, const char *args)								\
 {													\
 	int retries;											\
 													\
-	if ((!arg || strlen(arg) == 0) && args)									\
+	if ((!arg || strlen(arg) == 0) && args)								\
 	{												\
 		dolog(LOG_WARNING, "%s requires '%s' as an argument, none given, ignoring\n", #fn);	\
 		return;											\
@@ -359,7 +365,11 @@ static const struct empcd_funcs
 	const char *label;
 } func_map[] =
 {
+	/* empcd builtin commands */
 	{"EXEC",	f_exec,		"exec",			"<shellcmd>",		"Execute a command"},
+	{"QUIT",	f_quit,		"quit",			NULL,			"Quit empcd"},
+
+	/* MPD specific commands */
 	{"MPD_NEXT",	f_next,		"mpd_next",		NULL,			"MPD Next Track"},
 	{"MPD_PREV",	f_prev,		"mpd_prev",		NULL,			"MPD Previous Track"},
 	{"MPD_STOP",	f_stop,		"mpd_stop",		NULL,			"MPD Stop Playing"},
@@ -372,6 +382,8 @@ static const struct empcd_funcs
 	{"MPD_SAVE",	f_save,		"mpd_save",	"<playlist>",		"MPD Save Playlist"},
 	{"MPD_CLEAR",	f_clear,	"mpd_clear",	NULL,			"MPD Clear Playlist"},
 	{"MPD_REMOVE",	f_remove,	"mpd_remove",	"<playlist>",		"MPD Remove Playlist"},
+
+	/* End */
 	{NULL,		NULL,		NULL,			NULL,			"undefined"}
 };
 
@@ -398,29 +410,48 @@ bool set_event(uint16_t type, uint16_t code, int32_t value, void (*action)(const
 }
 
 /*
-	KEY_KPSLASH RELEASE f_seek -1
+	KEY_KPSLASH DOWN f_seek -1
 	<key> <value> <action> <arg>
 */
 bool set_event_from_map(char *buf, struct empcd_mapping *event_map, struct empcd_mapping *value_map)
 {
-	unsigned int i, o = 0, len = strlen(buf), l, event = 0, value = 0, func = 0;
-	void (*what)(char *arg);
-	char *arg = NULL;
+	unsigned int	i = 0, o = 0, len = strlen(buf), l,
+			event = 0, event_code = 0,
+			value = 0, func = 0;
+	void		(*what)(char *arg);
+	char		*arg = NULL, *event_name = "custom", *event_label = "custom";
 
-	for (i=0; event_map[i].code != EMPCD_MAPPING_END; i++)
+	/* Not a numeric value? */
+	if (sscanf(&buf[o], "%u", &i) == 1 && i == 0)
 	{
-		l = strlen(event_map[i].name);
-		if (len < o+l || buf[o+l] != ' ') continue;
-		if (strncasecmp(&buf[o], event_map[i].name, l) == 0) break;
+		/* This is our event_code */
+		event_code = i;
+		event = 0;
+	}
+	else
+	{
+		/* Try a name match */
+		for (i=0; event_map[i].code != EMPCD_MAPPING_END; i++)
+		{
+			l = strlen(event_map[i].name);
+			if (len < o+l || buf[o+l] != ' ') continue;
+			if (strncasecmp(&buf[o], event_map[i].name, l) == 0) break;
+		}
+
+		if (event_map[i].code == EMPCD_MAPPING_END)
+		{
+			dolog(LOG_DEBUG, "Undefined Code at %u in '%s'\n", o, buf);
+			return false;
+		}
+
+		/* This is our event_code */
+		event_code = event_map[i].code;
+		event_name = event_map[i].name;
+		event_label = event_map[i].label;
+		event = i;
 	}
 
-	if (event_map[i].code == EMPCD_MAPPING_END)
-	{
-		dolog(LOG_DEBUG, "Undefined Code at %u in '%s'\n", o, buf);
-		return false;
-	}
-	event = i;
-
+	/* Figure out the value (up/down/release/...) */
 	o += l+1;
 	for (i=0; value_map[i].code != EMPCD_MAPPING_END; i++)
 	{
@@ -436,6 +467,8 @@ bool set_event_from_map(char *buf, struct empcd_mapping *event_map, struct empcd
 	}
 	value = i;
 
+
+	/* Figure out the function */
 	o += l+1;
 	for (i=0; func_map[i].name != NULL; i++)
 	{
@@ -454,13 +487,13 @@ bool set_event_from_map(char *buf, struct empcd_mapping *event_map, struct empcd
 	o += l+1;
 	if (len > o) arg = &buf[o];
 
-	dolog(LOG_DEBUG, "Mapping Event %s (%s) %s (%s) to do %s (%s) with arg %s\n",
-		event_map[event].name, event_map[event].label,
+	dolog(LOG_DEBUG, "Mapping Event %s (%s/%u) %s (%s) to do %s (%s) with arg %s\n",
+		event_name, event_label, event_code,
 		value_map[value].name, value_map[value].label,
 		func_map[func].name, func_map[func].label,
 		arg ? arg : "<none>");
 
-	return set_event(EV_KEY, event_map[event].code, value_map[value].code, func_map[func].function, arg, func_map[func].args);
+	return set_event(EV_KEY, event_code, value_map[value].code, func_map[func].function, arg, func_map[func].args);
 }
 
 /********************************************************************/
@@ -499,7 +532,7 @@ int readconfig(char *cfgfile, char **device)
 		for (i=0,j=0; i<n; i++)
 		{
 			if (buf2[i] == '\t') buf2[i] = ' ';
-			if ((i == 0 || (i > 0 && buf2[i-1] == ' ')) &&
+			if (	(i == 0 || (i > 0 && buf2[i-1] == ' ')) &&
 				(buf2[i] == ' ' || buf2[i] == '\t'))
 			{
 				continue;
@@ -580,6 +613,14 @@ int readconfig(char *cfgfile, char **device)
 				dolog(LOG_ERR, "Couldn't find user %s\n", optarg);
 				return -1;
 			}
+		}
+		else if (strncasecmp("giveup", buf, 6) == 0)
+		{
+			giveup = true;
+		}
+		else if (strncasecmp("dontgiveup", buf, 10) == 0)
+		{
+			giveup = false;
 		}
 		else
 		{
@@ -700,8 +741,10 @@ void handle_event(struct input_event *ev)
 static struct option const long_options[] = {
 	{"config",		required_argument,	NULL, 'c'},
 	{"daemonize",		no_argument,		NULL, 'd'},
-	{"nodaemonize",		no_argument,		NULL, 'f'},
 	{"eventdevice",		required_argument,	NULL, 'e'},
+	{"nodaemonize",		no_argument,		NULL, 'f'},
+	{"giveup",		no_argument,		NULL, 'g'},
+	{"dontgiveup",		no_argument,		NULL, 'G'},
 	{"help",		no_argument,		NULL, 'h'},
 	{"list-keys",		no_argument,		NULL, 'K'},
 	{"list-functions",	no_argument,		NULL, 'L'},
@@ -709,13 +752,13 @@ static struct option const long_options[] = {
 	{"user",		required_argument,	NULL, 'u'},
 	{"verbose",		no_argument,		NULL, 'v'},
 	{"version",		no_argument,		NULL, 'V'},
-	{"verbosity",		required_argument,	NULL, 'y'},
 	{"exclusive",		no_argument,		NULL, 'x'},
 	{"nonexclusive",	no_argument,		NULL, 'X'},
+	{"verbosity",		required_argument,	NULL, 'y'},
 	{NULL,			no_argument,		NULL, 0},
 };
 
-static char short_options[] = "c:de:fhKLqu:vVy:";
+static char short_options[] = "c:de:fgGhKLqu:vVxXy:";
 
 static struct
 {
@@ -723,20 +766,22 @@ static struct
 	char *desc;
 } desc_options[] =
 {
-	{"<file>",		"Configuration File Location"},
-	{NULL,			"Detach the program into the background"},
-	{NULL,			"Don't detach, stay in the foreground"},
-	{"<eventdevice>",	"The event device to use, default: /dev/input/event0"},
-	{NULL,			"This help"},
-	{NULL,			"List the keys that are known to this program"},
-	{NULL,			"List the functions known to this program"},
-	{NULL,			"Lower the verbosity level to 0 (quiet)"},
-	{"<username>",		"Drop priveleges to <user>"},
-	{NULL,			"Increase the verbosity level by 1"},
-	{NULL,			"Show the version of this program"},
-	{"<level>",		"Set the verbosity level to <level>"},
-	{NULL,			"Exclusive device access (default)"},
-	{NULL,			"Non-Exclusive device access"},
+	/* c:	*/ {"<file>",		"Configuration File Location"},
+	/* d	*/ {NULL,		"Detach the program into the background"},
+	/* e:	*/ {"<eventdevice>",	"The event device to use (default: /dev/input/event0)"},
+	/* f	*/ {NULL,		"Don't detach, stay in the foreground"},
+	/* g	*/ {NULL,		"Give up when opening the device fails (default)"},
+	/* G:	*/ {NULL,		"Do not give up when opening the device fails"},
+	/* h	*/ {NULL,		"This help"},
+	/* K	*/ {NULL,		"List the keys that are known to this program"},
+	/* L	*/ {NULL,		"List the functions known to this program"},
+	/* q	*/ {NULL,		"Lower the verbosity level to 0 (quiet)"},
+	/* u:	*/ {"<username>",	"Drop priveleges to <user>"},
+	/* v	*/ {NULL,		"Increase the verbosity level by 1"},
+	/* V	*/ {NULL,		"Show the version of this program"},
+	/* x	*/ {NULL,		"Exclusive device access (default)"},
+	/* X	*/ {NULL,		"Non-Exclusive device access"},
+	/* y:	*/ {"<level>",		"Set the verbosity level to <level>"},
 	{NULL,			NULL}
 };
 
@@ -760,13 +805,21 @@ int main (int argc, char **argv)
 			daemonize = true;
 			break;
 
+		case 'e':
+			if (device) free(device);
+			device = strdup(optarg);
+			break;
+
 		case 'f':
 			daemonize = false;
 			break;
 
-		case 'e':
-			if (device) free(device);
-			device = strdup(optarg);
+		case 'g':
+			giveup = true;
+			break;
+
+		case 'G':
+			giveup = true;
 			break;
 
 		case 'h':
@@ -790,17 +843,17 @@ int main (int argc, char **argv)
 
 			return 1;
 
-		case 'L':
-			for (i=0; func_map[i].name; i++)
-			{
-				fprintf(stderr, "%-15s %20s %s\n", func_map[i].format, func_map[i].args ? func_map[i].args : "", func_map[i].label);
-			}
-			return 0;
-
 		case 'K':
 			for (i=0; key_event_map[i].code != EMPCD_MAPPING_END; i++)
 			{
 				fprintf(stderr, "%-25s %s\n", key_event_map[i].name, key_event_map[i].label);
+			}
+			return 0;
+
+		case 'L':
+			for (i=0; func_map[i].name; i++)
+			{
+				fprintf(stderr, "%-15s %20s %s\n", func_map[i].format, func_map[i].args ? func_map[i].args : "", func_map[i].label);
 			}
 			return 0;
 
@@ -831,10 +884,6 @@ int main (int argc, char **argv)
 			verbosity++;
 			break;
 
-		case 'y':
-			verbosity = atoi(optarg);
-			break;
-
 		case 'V':
 			fprintf(stderr, EMPCD_VSTRING, EMPCD_VERSION);
 			return 1;
@@ -845,6 +894,10 @@ int main (int argc, char **argv)
 
 		case 'X':
 			exclusive = false;
+			break;
+
+		case 'y':
+			verbosity = atoi(optarg);
 			break;
 
 		default:
@@ -910,7 +963,7 @@ int main (int argc, char **argv)
 		{
 			dolog(LOG_ERR, "Couldn't fork for daemonization\n");
 			return 1;
-                }
+		}
 
 		/* Exit the mother fork */
 		if (j != 0) return 0;
@@ -940,18 +993,33 @@ int main (int argc, char **argv)
 	signal(SIGTSTP, SIG_IGN);
 	signal(SIGTTIN, SIG_IGN);
 	signal(SIGTTOU, SIG_IGN);
-        signal(SIGUSR1, SIG_IGN);
-        signal(SIGUSR2, SIG_IGN);
+	signal(SIGUSR1, SIG_IGN);
+	signal(SIGUSR2, SIG_IGN);
 
-	/* Try to open the device */
-	fd = open(device, O_RDONLY);
-	if (fd < 0)
+	while (running)
 	{
-		perror("Couldn't open event device");
-		return 1;
+		/* Try to open the device */
+		fd = open(device, O_RDONLY);
+
+		/* Worked? */
+		if (fd >= 0) break;
+
+		dolog(LOG_ERR, "Couldn't open event device %s: %u\n", device, errno);
+
+		if (giveup) break;
+
+		/* Sleep a bit and try it all again, cheap enough to not flood the CPU */
+		sleep(1);
 	}
+
 	free(device);
 	device = NULL;
+
+	if (fd < 0)
+	{
+		dolog(LOG_ERR, "Couldn't open event device, gave up\n");
+		return 1;
+	}
 
 	/* Obtain Exclusive device access */
 	if (exclusive) ioctl(fd, EVIOCGRAB, 1);
