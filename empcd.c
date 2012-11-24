@@ -242,6 +242,24 @@ F_CMDA(f_load,		mpd_sendLoadCommand)
 F_CMDA(f_remove,	mpd_sendRmCommand)
 F_CMDN(f_clear,		mpd_sendClearCommand)
 
+void f_reload(const char *arg, const char *args)
+{
+	mpd_sendClearCommand(mpd);
+	mpd_finishCommand(mpd);
+	mpd_sendLoadCommand(mpd,arg);
+	mpd_finishCommand(mpd);
+	mpd_sendPlayCommand(mpd,-1);
+	mpd_finishCommand(mpd);
+}
+
+void f_overwrite(const char *arg, const char *args)
+{
+	mpd_sendRmCommand(mpd,arg);
+	mpd_finishCommand(mpd);
+	mpd_sendSaveCommand(mpd,arg);
+	mpd_finishCommand(mpd);
+}
+
 void f_volume(const char *arg, const char *args)
 {
 	int	dir = 0, volume = 0, i = 0, retry = 5;
@@ -409,6 +427,8 @@ static const struct empcd_funcs
 	{ f_save,	true, "mpd_plst_save",		"<playlist>",		"MPD Save Playlist"							},
 	{ f_clear,	true, "mpd_plst_clear",		NULL,			"MPD Clear Playlist"							},
 	{ f_remove,	true, "mpd_plst_remove",	"<playlist>",		"MPD Remove Playlist"							},
+	{ f_reload,	true, "mpd_plst_reload",		NULL,			"MPD Reload Playlist"							},
+	{ f_overwrite,	true, "mpd_plst_save_force",	"<playlist>",		"MPD Overwrite Playlist"							},
 
 	/* End */
 	{ NULL,		false, NULL,			NULL,			"undefined"								}
